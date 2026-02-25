@@ -16,6 +16,7 @@ from dev_talk import __version__
 from dev_talk.audio import AudioManager
 from dev_talk.config import Config
 from dev_talk.engines.local_mlx import MLXWhisperEngine
+from dev_talk.engines.remote_openai import OpenAIWhisperEngine
 from dev_talk.hotkeys import HotkeyManager
 from dev_talk.overlay import RecordingOverlay
 from dev_talk.text_input import inject_text
@@ -41,7 +42,7 @@ class DevTalkApp(rumps.App):
         self._recording_thread: threading.Thread | None = None
 
         # Set up transcription engine
-        self._engine = MLXWhisperEngine(model=self._config.model)
+        self._engine = self._create_engine()
         self._transcriber = Transcriber(engine=self._engine, language=self._config.language)
 
         # Set up hotkeys
@@ -66,10 +67,19 @@ class DevTalkApp(rumps.App):
         self.menu.add(status)
         self.menu.add(rumps.separator)
 
-        # Engine info
-        engine_item = rumps.MenuItem(f"Engine: {self._transcriber.engine_name}")
-        engine_item.set_callback(None)
-        self.menu.add(engine_item)
+        # Engine selection submenu
+        engine_menu = rumps.MenuItem("Engine")
+        local_prefix = "✓ " if self._config.engine == "local" else "  "
+        engine_menu.add(rumps.MenuItem(
+            f"{local_prefix}Local (MLX Whisper)",
+            callback=lambda _: self._switch_engine("local"),
+        ))
+        openai_prefix = "✓ " if self._config.engine == "openai" else "  "
+        engine_menu.add(rumps.MenuItem(
+            f"{openai_prefix}OpenAI API",
+            callback=lambda _: self._switch_engine("openai"),
+        ))
+        self.menu.add(engine_menu)
 
         # Streaming mode toggle
         mode_label = "Streaming" if self._config.streaming_mode else "Full Recording"
@@ -107,6 +117,31 @@ class DevTalkApp(rumps.App):
 
         # Quit
         self.menu.add(rumps.MenuItem("Quit Dev Talk", callback=self._quit))
+
+    def _create_engine(self):
+        """Create the appropriate STT engine based on config."""
+        if self._config.engine == "openai" and self._config.openai_api_key:
+            return OpenAIWhisperEngine(
+                api_key=self._config.openai_api_key,
+                model=self._config.openai_model,
+            )
+        return MLXWhisperEngine(model=self._config.model)
+
+    def _switch_engine(self, engine_type: str) -> None:
+        """Switch between local and OpenAI engines."""
+        if engine_type == "openai" and not self._config.openai_api_key:
+            rumps.notification(
+                "Dev Talk",
+                "API Key Required",
+                "Set your OpenAI API key in ~/.config/dev-talk/config.json",
+            )
+            return
+
+        self._config.update(engine=engine_type)
+        self._engine = self._create_engine()
+        self._transcriber.engine = self._engine
+        self._build_menu()
+        logger.info("Engine switched to: %s", self._transcriber.engine_name)
 
     def _select_mic(self, device_id: int, device_name: str) -> None:
         """Handle microphone selection."""
