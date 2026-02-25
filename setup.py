@@ -31,7 +31,7 @@ OPTIONS = {
         "mlx",
         "mlx_whisper",
         "sounddevice",
-        "pynput",
+
         "numpy",
         "openai",
     ],

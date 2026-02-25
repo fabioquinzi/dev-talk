@@ -48,8 +48,11 @@ The app will appear in your menubar. On first run, the Whisper model (~1.6 GB) w
 
 macOS will prompt you to grant:
 - **Microphone access** — for recording
-- **Accessibility** — for text injection (System Settings → Privacy & Security → Accessibility)
-- **Input Monitoring** — for global hotkeys (System Settings → Privacy & Security → Input Monitoring)
+- **Accessibility** — for global hotkeys and text injection (System Settings → Privacy & Security → Accessibility)
+
+Use **Setup & Diagnostics** in the menubar dropdown to verify permissions and test hotkey detection.
+
+> **Note:** When running from a terminal (VS Code, Terminal.app, iTerm), permissions are attributed to the terminal app, not Dev Talk. The diagnostics menu will tell you which app needs the permissions.
 
 ### 4. Start talking
 
@@ -133,13 +136,14 @@ src/dev_talk/
   audio.py            — Microphone capture and device enumeration
   transcriber.py      — STT engine abstraction (protocol + coordinator)
   config.py           — JSON settings persistence
-  hotkeys.py          — Global keyboard shortcuts (pynput + Quartz fn key)
+  hotkeys.py          — Global keyboard shortcuts (NSEvent global monitors)
+  diagnostics.py      — Permission checks and hardware tests
   text_input.py       — Text injection via CGEvent / clipboard
   overlay.py          — Floating recording indicator (PyObjC)
   engines/
     local_mlx.py      — MLX Whisper local engine
     remote_openai.py  — OpenAI Whisper API engine
-tests/                — pytest test suite (107 tests)
+tests/                — pytest test suite
 ```
 
 ### Available hotkey names

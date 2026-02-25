@@ -1,23 +1,18 @@
 """Global hotkey manager for push-to-talk and hands-free modes.
 
-Uses pynput for regular keys and a Quartz CGEvent tap for the fn (globe)
-key, which pynput cannot detect on macOS.
-Requires macOS Input Monitoring permission.
+Uses NSEvent global monitors (AppKit/PyObjC) to detect keyboard events
+system-wide. Only requires Accessibility permission — no Input Monitoring
+needed. This matches how Wispr Flow handles hotkeys on macOS.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Callable
 
-from pynput import keyboard
-
 logger = logging.getLogger(__name__)
-
-# Sentinel object representing the fn key (not available in pynput)
-_FN_KEY_SENTINEL = "<<fn>>"
 
 
 class RecordingMode(Enum):
@@ -25,122 +20,105 @@ class RecordingMode(Enum):
     HANDS_FREE = auto()
 
 
-# Map common key names to pynput Key objects.
-# Built dynamically to avoid AttributeError on platforms where some keys don't exist.
-_SPECIAL_KEYS: dict[str, keyboard.Key] = {}
-for _name in [
-    "alt", "alt_l", "alt_r", "backspace", "caps_lock", "cmd", "cmd_l", "cmd_r",
-    "ctrl", "ctrl_l", "ctrl_r", "delete", "down", "end", "enter", "esc",
-    "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
-    "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20",
-    "home", "left", "page_down", "page_up", "right", "shift", "shift_l", "shift_r",
-    "space", "tab", "up",
-]:
-    if hasattr(keyboard.Key, _name):
-        _SPECIAL_KEYS[_name] = getattr(keyboard.Key, _name)
+# --- Key representation ---
+
+@dataclass(frozen=True)
+class _Modifier:
+    """A modifier key detected via NSEvent modifier flags."""
+    flag: int
 
 
-def parse_key(key_str: str) -> keyboard.Key | keyboard.KeyCode | str:
-    """Parse a key string into a pynput key object, or the fn sentinel."""
+@dataclass(frozen=True)
+class _KeyCode:
+    """A key identified by its macOS virtual key code."""
+    code: int
+
+
+@dataclass(frozen=True)
+class _CharKey:
+    """A key identified by its character."""
+    char: str
+
+
+ParsedKey = _Modifier | _KeyCode | _CharKey
+
+
+# --- Key maps ---
+
+# Modifier keys (detected via NSEventMaskFlagsChanged + modifierFlags)
+_MODIFIER_MAP: dict[str, _Modifier] = {
+    "fn": _Modifier(0x800000),       # NSEventModifierFlagFunction
+    "ctrl": _Modifier(0x40000),      # NSEventModifierFlagControl
+    "ctrl_l": _Modifier(0x40000),
+    "ctrl_r": _Modifier(0x40000),
+    "shift": _Modifier(0x20000),     # NSEventModifierFlagShift
+    "shift_l": _Modifier(0x20000),
+    "shift_r": _Modifier(0x20000),
+    "alt": _Modifier(0x80000),       # NSEventModifierFlagOption
+    "alt_l": _Modifier(0x80000),
+    "alt_r": _Modifier(0x80000),
+    "cmd": _Modifier(0x100000),      # NSEventModifierFlagCommand
+    "cmd_l": _Modifier(0x100000),
+    "cmd_r": _Modifier(0x100000),
+    "caps_lock": _Modifier(0x10000), # NSEventModifierFlagCapsLock
+}
+
+# Regular keys (detected via keyDown/keyUp + keyCode)
+_KEYCODE_MAP: dict[str, _KeyCode] = {
+    "space": _KeyCode(49),
+    "tab": _KeyCode(48),
+    "enter": _KeyCode(36),
+    "esc": _KeyCode(53),
+    "backspace": _KeyCode(51),
+    "delete": _KeyCode(117),
+    "up": _KeyCode(126),
+    "down": _KeyCode(125),
+    "left": _KeyCode(123),
+    "right": _KeyCode(124),
+    "home": _KeyCode(115),
+    "end": _KeyCode(119),
+    "page_up": _KeyCode(116),
+    "page_down": _KeyCode(121),
+    "f1": _KeyCode(122),
+    "f2": _KeyCode(120),
+    "f3": _KeyCode(99),
+    "f4": _KeyCode(118),
+    "f5": _KeyCode(96),
+    "f6": _KeyCode(97),
+    "f7": _KeyCode(98),
+    "f8": _KeyCode(100),
+    "f9": _KeyCode(101),
+    "f10": _KeyCode(109),
+    "f11": _KeyCode(103),
+    "f12": _KeyCode(111),
+    "f13": _KeyCode(105),
+    "f14": _KeyCode(107),
+    "f15": _KeyCode(113),
+    "f16": _KeyCode(106),
+    "f17": _KeyCode(64),
+    "f18": _KeyCode(79),
+    "f19": _KeyCode(80),
+    "f20": _KeyCode(90),
+}
+
+
+def parse_key(key_str: str) -> ParsedKey:
+    """Parse a key name string into a key object."""
     key_str = key_str.lower().strip()
-    if key_str == "fn":
-        return _FN_KEY_SENTINEL
-    if key_str in _SPECIAL_KEYS:
-        return _SPECIAL_KEYS[key_str]
+    if key_str in _MODIFIER_MAP:
+        return _MODIFIER_MAP[key_str]
+    if key_str in _KEYCODE_MAP:
+        return _KEYCODE_MAP[key_str]
     if len(key_str) == 1:
-        return keyboard.KeyCode.from_char(key_str)
+        return _CharKey(key_str)
     raise ValueError(f"Unknown key: {key_str!r}")
-
-
-def _normalize_key(key: keyboard.Key | keyboard.KeyCode) -> keyboard.Key | keyboard.KeyCode:
-    """Normalize a key for consistent comparison."""
-    if isinstance(key, keyboard.KeyCode) and key.char is not None:
-        return keyboard.KeyCode.from_char(key.char.lower())
-    return key
-
-
-class _FnKeyMonitor:
-    """Monitors the fn (globe) key via Quartz CGEvent tap.
-
-    The fn key is a modifier that fires kCGEventFlagsChanged (type 12).
-    We detect it by checking the kCGEventFlagMaskSecondaryFn bit (0x800000).
-    """
-
-    def __init__(
-        self,
-        on_press: Callable[[], None],
-        on_release: Callable[[], None],
-    ) -> None:
-        self._on_press = on_press
-        self._on_release = on_release
-        self._fn_down = False
-        self._thread: threading.Thread | None = None
-        self._running = False
-        self._run_loop = None
-
-    def start(self) -> None:
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._running = False
-        if self._run_loop is not None:
-            import Quartz
-            Quartz.CFRunLoopStop(self._run_loop)
-        self._thread = None
-        self._fn_down = False
-
-    def _run(self) -> None:
-        import Quartz
-
-        def callback(proxy, event_type, event, refcon):
-            flags = Quartz.CGEventGetFlags(event)
-            fn_pressed = bool(flags & Quartz.kCGEventFlagMaskSecondaryFn)
-
-            if fn_pressed and not self._fn_down:
-                self._fn_down = True
-                self._on_press()
-            elif not fn_pressed and self._fn_down:
-                self._fn_down = False
-                self._on_release()
-
-            return event
-
-        mask = 1 << Quartz.kCGEventFlagsChanged
-        tap = Quartz.CGEventTapCreate(
-            Quartz.kCGSessionEventTap,
-            Quartz.kCGHeadInsertEventTap,
-            Quartz.kCGEventTapOptionListenOnly,
-            mask,
-            callback,
-            None,
-        )
-
-        if tap is None:
-            logger.warning(
-                "Could not create CGEvent tap for fn key. "
-                "Grant Input Monitoring permission in System Settings."
-            )
-            return
-
-        source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
-        self._run_loop = Quartz.CFRunLoopGetCurrent()
-        Quartz.CFRunLoopAddSource(self._run_loop, source, Quartz.kCFRunLoopCommonModes)
-        Quartz.CGEventTapEnable(tap, True)
-
-        logger.info("Fn key monitor started via CGEvent tap")
-        Quartz.CFRunLoopRun()
 
 
 class HotkeyManager:
     """Manages global keyboard shortcuts for recording control.
 
-    Two modes:
-    - Push-to-talk: Hold a key to record, release to stop. Default: fn
-    - Hands-free: Press a key combo to toggle recording on/off. Default: fn+space
+    Uses NSEvent global monitors — only requires Accessibility permission.
+    Default: fn (push-to-talk), fn+Space (hands-free toggle).
     """
 
     def __init__(
@@ -152,17 +130,16 @@ class HotkeyManager:
         on_hands_free_toggle: Callable[[], None] | None = None,
     ) -> None:
         self._ptt_key = parse_key(push_to_talk_key)
-        self._hf_keys = {parse_key(k) for k in (hands_free_keys or ["fn", "space"])}
-        self._uses_fn = self._ptt_key == _FN_KEY_SENTINEL or _FN_KEY_SENTINEL in self._hf_keys
+        self._hf_keys: set[ParsedKey] = {parse_key(k) for k in (hands_free_keys or ["fn", "space"])}
 
         self._on_ptt_start = on_push_to_talk_start or (lambda: None)
         self._on_ptt_stop = on_push_to_talk_stop or (lambda: None)
         self._on_hf_toggle = on_hands_free_toggle or (lambda: None)
 
-        self._pressed_keys: set = set()
+        self._current_flags: int = 0
+        self._pressed_keys: set[ParsedKey] = set()
         self._ptt_active = False
-        self._listener: keyboard.Listener | None = None
-        self._fn_monitor: _FnKeyMonitor | None = None
+        self._monitors: list = []
         self._running = False
 
     @property
@@ -170,82 +147,148 @@ class HotkeyManager:
         return self._running
 
     def start(self) -> None:
-        """Start listening for global hotkeys."""
+        """Start listening for global hotkeys via NSEvent monitors."""
         if self._running:
             return
 
         self._running = True
 
-        # Start pynput listener for regular keys
-        self._listener = keyboard.Listener(
-            on_press=self._on_press,
-            on_release=self._on_release,
-        )
-        self._listener.daemon = True
-        self._listener.start()
+        try:
+            import AppKit
 
-        # Start fn key monitor if needed
-        if self._uses_fn:
-            self._fn_monitor = _FnKeyMonitor(
-                on_press=self._on_fn_press,
-                on_release=self._on_fn_release,
+            mask = (
+                AppKit.NSEventMaskFlagsChanged
+                | AppKit.NSEventMaskKeyDown
+                | AppKit.NSEventMaskKeyUp
             )
-            self._fn_monitor.start()
-
-        logger.info("Hotkey manager started")
+            monitor = AppKit.NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                mask, self._handle_event
+            )
+            if monitor is not None:
+                self._monitors.append(monitor)
+                logger.info("Hotkey manager started (NSEvent global monitor)")
+            else:
+                logger.warning(
+                    "Could not create NSEvent global monitor. "
+                    "Grant Accessibility permission in System Settings."
+                )
+        except ImportError:
+            logger.warning("AppKit not available — hotkey monitoring disabled")
 
     def stop(self) -> None:
         """Stop listening for global hotkeys."""
         self._running = False
-        if self._listener is not None:
-            self._listener.stop()
-            self._listener = None
-        if self._fn_monitor is not None:
-            self._fn_monitor.stop()
-            self._fn_monitor = None
+        try:
+            import AppKit
+
+            for monitor in self._monitors:
+                AppKit.NSEvent.removeMonitor_(monitor)
+        except ImportError:
+            pass
+        self._monitors.clear()
         self._pressed_keys.clear()
+        self._current_flags = 0
         self._ptt_active = False
         logger.info("Hotkey manager stopped")
 
-    def _on_fn_press(self) -> None:
-        """Called when the fn key is pressed (from CGEvent tap)."""
-        self._pressed_keys.add(_FN_KEY_SENTINEL)
-        self._check_hotkeys(_FN_KEY_SENTINEL)
+    def _handle_event(self, event) -> None:
+        """Process an NSEvent from the global monitor."""
+        try:
+            import AppKit
 
-    def _on_fn_release(self) -> None:
-        """Called when the fn key is released (from CGEvent tap)."""
-        self._pressed_keys.discard(_FN_KEY_SENTINEL)
+            event_type = event.type()
+            if event_type == AppKit.NSEventTypeFlagsChanged:
+                self._on_flags_changed(event.modifierFlags())
+            elif event_type == AppKit.NSEventTypeKeyDown:
+                chars = (event.charactersIgnoringModifiers() or "").lower()
+                self._on_key_down(event.keyCode(), chars)
+            elif event_type == AppKit.NSEventTypeKeyUp:
+                chars = (event.charactersIgnoringModifiers() or "").lower()
+                self._on_key_up(event.keyCode(), chars)
+        except Exception:
+            logger.exception("Error handling keyboard event")
 
-        if self._ptt_key == _FN_KEY_SENTINEL and self._ptt_active:
-            self._ptt_active = False
-            logger.debug("Push-to-talk stopped (fn released)")
-            self._on_ptt_stop()
+    # --- Internal methods (also used directly in tests) ---
 
-    def _on_press(self, key: keyboard.Key | keyboard.KeyCode) -> None:
-        """Called when a regular key is pressed (from pynput)."""
-        normalized = _normalize_key(key)
-        self._pressed_keys.add(normalized)
-        self._check_hotkeys(normalized)
+    def _on_flags_changed(self, new_flags: int) -> None:
+        """Handle modifier key state changes."""
+        old_flags = self._current_flags
+        self._current_flags = new_flags
 
-    def _on_release(self, key: keyboard.Key | keyboard.KeyCode) -> None:
-        """Called when a regular key is released (from pynput)."""
-        normalized = _normalize_key(key)
-        self._pressed_keys.discard(normalized)
+        # Collect all modifiers we care about
+        watched: set[_Modifier] = set()
+        if isinstance(self._ptt_key, _Modifier):
+            watched.add(self._ptt_key)
+        watched.update(k for k in self._hf_keys if isinstance(k, _Modifier))
 
-        if normalized == self._ptt_key and self._ptt_active:
+        for mod in watched:
+            was_pressed = bool(old_flags & mod.flag)
+            is_pressed = bool(new_flags & mod.flag)
+
+            if is_pressed and not was_pressed:
+                self._check_hotkeys(mod)
+            elif was_pressed and not is_pressed:
+                if mod == self._ptt_key and self._ptt_active:
+                    self._ptt_active = False
+                    logger.debug("Push-to-talk stopped (%s released)", mod)
+                    self._on_ptt_stop()
+
+    def _on_key_down(self, key_code: int, chars: str) -> None:
+        """Handle regular key press."""
+        code_key = _KeyCode(key_code)
+        self._pressed_keys.add(code_key)
+        if chars:
+            self._pressed_keys.add(_CharKey(chars))
+
+        # Find which configured key this matches
+        triggered = None
+        if code_key in self._hf_keys or code_key == self._ptt_key:
+            triggered = code_key
+        elif chars:
+            ck = _CharKey(chars)
+            if ck in self._hf_keys or ck == self._ptt_key:
+                triggered = ck
+
+        if triggered is not None:
+            self._check_hotkeys(triggered)
+
+    def _on_key_up(self, key_code: int, chars: str) -> None:
+        """Handle regular key release."""
+        code_key = _KeyCode(key_code)
+        self._pressed_keys.discard(code_key)
+        if chars:
+            self._pressed_keys.discard(_CharKey(chars))
+
+        # Check PTT release
+        released = code_key == self._ptt_key
+        if not released and chars:
+            released = _CharKey(chars) == self._ptt_key
+
+        if released and self._ptt_active:
             self._ptt_active = False
             logger.debug("Push-to-talk stopped")
             self._on_ptt_stop()
 
-    def _check_hotkeys(self, triggered_key) -> None:
+    def _is_combo_active(self, keys: set[ParsedKey]) -> bool:
+        """Check if all keys in a combo are currently pressed."""
+        for key in keys:
+            if isinstance(key, _Modifier):
+                if not (self._current_flags & key.flag):
+                    return False
+            else:
+                if key not in self._pressed_keys:
+                    return False
+        return True
+
+    def _check_hotkeys(self, triggered_key: ParsedKey) -> None:
         """Check if any hotkey combo is satisfied after a key press."""
-        # Check hands-free combo first (all keys in the combo must be pressed)
-        if self._hf_keys and self._hf_keys.issubset(self._pressed_keys):
+        # Hands-free combo takes priority (all keys must be pressed)
+        if self._hf_keys and self._is_combo_active(self._hf_keys):
             logger.debug("Hands-free toggle triggered")
             self._on_hf_toggle()
             return
 
-        # Check push-to-talk (single key)
+        # Push-to-talk (single key)
         if triggered_key == self._ptt_key and not self._ptt_active:
             self._ptt_active = True
             logger.debug("Push-to-talk started")
@@ -261,18 +304,3 @@ class HotkeyManager:
             self._ptt_key = parse_key(push_to_talk_key)
         if hands_free_keys is not None:
             self._hf_keys = {parse_key(k) for k in hands_free_keys}
-
-        old_uses_fn = self._uses_fn
-        self._uses_fn = self._ptt_key == _FN_KEY_SENTINEL or _FN_KEY_SENTINEL in self._hf_keys
-
-        # Start/stop fn monitor as needed
-        if self._running:
-            if self._uses_fn and not old_uses_fn and self._fn_monitor is None:
-                self._fn_monitor = _FnKeyMonitor(
-                    on_press=self._on_fn_press,
-                    on_release=self._on_fn_release,
-                )
-                self._fn_monitor.start()
-            elif not self._uses_fn and old_uses_fn and self._fn_monitor is not None:
-                self._fn_monitor.stop()
-                self._fn_monitor = None

@@ -112,8 +112,8 @@ Remote transcription via OpenAI's Whisper API.
 
 Manages global keyboard shortcuts for push-to-talk and hands-free modes.
 
-Uses pynput for regular keys and a Quartz CGEvent tap for the `fn` (globe) key,
-which pynput cannot detect on macOS. Requires Input Monitoring permission.
+Uses NSEvent global monitors (AppKit) to detect all keyboard events including the
+`fn` (globe) key. Only requires Accessibility permission — no Input Monitoring needed.
 
 ```python
 class HotkeyManager:
@@ -210,10 +210,9 @@ class Config:
 The app needs the following macOS permissions:
 
 1. **Microphone Access** — for audio recording
-2. **Accessibility** — for global hotkeys and text injection (CGEvent)
-3. **Input Monitoring** — for detecting key presses globally
+2. **Accessibility** — for global hotkeys (NSEvent monitors) and text injection (CGEvent paste)
 
-These will be requested on first launch via standard macOS permission dialogs.
+No Input Monitoring permission is needed. NSEvent global monitors only require Accessibility.
 
 ---
 

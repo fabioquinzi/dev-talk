@@ -115,6 +115,17 @@ class DevTalkApp(rumps.App):
 
         self.menu.add(rumps.separator)
 
+        # Setup & Diagnostics submenu
+        diag_menu = rumps.MenuItem("Setup & Diagnostics")
+        diag_menu.add(rumps.MenuItem("Check Permissions", callback=self._check_permissions))
+        diag_menu.add(rumps.MenuItem("Test Microphone", callback=self._test_microphone))
+        diag_menu.add(rumps.MenuItem("Test Hotkey (fn)", callback=self._test_hotkey))
+        diag_menu.add(rumps.separator)
+        diag_menu.add(rumps.MenuItem("Permission Guide", callback=self._show_permission_guide))
+        self.menu.add(diag_menu)
+
+        self.menu.add(rumps.separator)
+
         # Quit
         self.menu.add(rumps.MenuItem("Quit Dev Talk", callback=self._quit))
 
@@ -244,6 +255,79 @@ class DevTalkApp(rumps.App):
         finally:
             self.title = ICON_IDLE
             self._overlay.hide()
+
+    def _check_permissions(self, sender: rumps.MenuItem) -> None:
+        """Run all permission checks and show results."""
+        from dev_talk.diagnostics import check_all_permissions, format_results, get_host_app
+
+        host = get_host_app()
+        results = check_all_permissions()
+        message = format_results(results, host)
+        rumps.alert(title="Permission Check", message=message)
+
+    def _test_microphone(self, sender: rumps.MenuItem) -> None:
+        """Test microphone recording."""
+        from dev_talk.diagnostics import test_microphone_recording
+
+        def _run():
+            result = test_microphone_recording(device_id=self._config.mic_device_id)
+            rumps.alert(title="Microphone Test", message=result.message)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _test_hotkey(self, sender: rumps.MenuItem) -> None:
+        """Interactive fn key test."""
+        from dev_talk.diagnostics import test_fn_key_detection
+
+        # Pause main hotkeys during test to avoid side effects
+        self._hotkeys.stop()
+
+        event, handle = test_fn_key_detection()
+        rumps.alert(
+            title="Test Hotkey",
+            message="Press and release the fn (globe) key, then click OK.",
+        )
+        handle.stop()
+
+        if event.is_set():
+            rumps.alert(title="Hotkey Test", message="fn key detected! Hotkeys are working.")
+        else:
+            rumps.alert(
+                title="Hotkey Test",
+                message=(
+                    "fn key was NOT detected.\n\n"
+                    "Possible causes:\n"
+                    "- Accessibility permission not granted\n"
+                    "- Permission granted to wrong app\n"
+                    "- fn key behavior changed in System Settings > Keyboard"
+                ),
+            )
+
+        # Resume main hotkeys
+        self._hotkeys.start()
+
+    def _show_permission_guide(self, sender: rumps.MenuItem) -> None:
+        """Show permission setup guide."""
+        from dev_talk.diagnostics import get_host_app
+
+        host = get_host_app()
+        rumps.alert(
+            title="Permission Guide",
+            message=(
+                f"Dev Talk is running inside: {host}\n"
+                f"Permissions must be granted to {host}.\n\n"
+                "System Settings > Privacy & Security:\n\n"
+                "1. Accessibility\n"
+                f"   Add {host}\n"
+                "   (Required for hotkeys + text injection)\n\n"
+                "2. Microphone\n"
+                f"   Add {host}\n"
+                "   (Required for recording)\n\n"
+                "After granting permissions, restart Dev Talk.\n\n"
+                "Tip: Build as a .app (python setup.py py2app) to get\n"
+                "Dev Talk as its own entry in the permission lists."
+            ),
+        )
 
     def _quit(self, sender: rumps.MenuItem) -> None:
         """Clean shutdown."""
