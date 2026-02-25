@@ -6,8 +6,8 @@ A menubar application that captures your voice and transcribes it into text in a
 
 ## Features
 
-- **Push-to-talk** — Hold a key (default: `F5`), speak, release to transcribe
-- **Hands-free mode** — Press a combo (default: `Ctrl+Shift`) to toggle continuous recording
+- **Push-to-talk** — Hold a key (default: `fn`), speak, release to transcribe
+- **Hands-free mode** — Press a combo (default: `fn+Space`) to toggle continuous recording
 - **Streaming transcription** — Text appears while you speak (chunked processing)
 - **Full recording mode** — Record everything, then transcribe at once (more accurate)
 - **Local-first** — Runs entirely on your Mac using MLX Whisper, no cloud needed
@@ -53,8 +53,8 @@ macOS will prompt you to grant:
 
 ### 4. Start talking
 
-- **Push-to-talk:** Hold `F5`, speak, release → text appears in your focused app
-- **Hands-free:** Press `Ctrl+Shift` to start, speak freely, press again to stop
+- **Push-to-talk:** Hold `fn`, speak, release → text appears in your focused app
+- **Hands-free:** Press `fn+Space` to start, speak freely, press again to stop
 
 ## Configuration
 
@@ -67,8 +67,8 @@ Settings are stored in `~/.config/dev-talk/config.json`. Edit directly or use th
   "language": "en",
   "openai_api_key": "",
   "openai_model": "whisper-1",
-  "push_to_talk_key": "f5",
-  "hands_free_keys": ["ctrl", "shift"],
+  "push_to_talk_key": "fn",
+  "hands_free_keys": ["fn", "space"],
   "mic_device_id": null,
   "streaming_mode": true,
   "chunk_duration_s": 3.0,
@@ -133,7 +133,7 @@ src/dev_talk/
   audio.py            — Microphone capture and device enumeration
   transcriber.py      — STT engine abstraction (protocol + coordinator)
   config.py           — JSON settings persistence
-  hotkeys.py          — Global keyboard shortcuts (pynput)
+  hotkeys.py          — Global keyboard shortcuts (pynput + Quartz fn key)
   text_input.py       — Text injection via CGEvent / clipboard
   overlay.py          — Floating recording indicator (PyObjC)
   engines/
@@ -144,7 +144,7 @@ tests/                — pytest test suite (107 tests)
 
 ### Available hotkey names
 
-Special keys: `ctrl`, `shift`, `alt`, `cmd`, `space`, `tab`, `esc`, `f1`-`f20`, `caps_lock`, `enter`, `backspace`, `delete`, `up`, `down`, `left`, `right`, `home`, `end`, `page_up`, `page_down`
+Special keys: `fn`, `ctrl`, `shift`, `alt`, `cmd`, `space`, `tab`, `esc`, `f1`-`f20`, `caps_lock`, `enter`, `backspace`, `delete`, `up`, `down`, `left`, `right`, `home`, `end`, `page_up`, `page_down`
 
 Single characters: `a`-`z`, `0`-`9`
 

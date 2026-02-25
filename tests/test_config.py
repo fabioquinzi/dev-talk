@@ -12,8 +12,8 @@ def test_default_config():
     assert cfg.language == "en"
     assert cfg.streaming_mode is True
     assert cfg.chunk_duration_s == 3.0
-    assert cfg.push_to_talk_key == "f5"
-    assert cfg.hands_free_keys == ["ctrl", "shift"]
+    assert cfg.push_to_talk_key == "fn"
+    assert cfg.hands_free_keys == ["fn", "space"]
     assert cfg.mic_device_id is None
     assert cfg.injection_method == "paste"
 

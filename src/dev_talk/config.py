@@ -28,8 +28,8 @@ class Config:
     openai_model: str = "whisper-1"
 
     # Hotkeys
-    push_to_talk_key: str = "f5"
-    hands_free_keys: list[str] = field(default_factory=lambda: ["ctrl", "shift"])
+    push_to_talk_key: str = "fn"
+    hands_free_keys: list[str] = field(default_factory=lambda: ["fn", "space"])
 
     # Microphone (None = system default)
     mic_device_id: int | None = None

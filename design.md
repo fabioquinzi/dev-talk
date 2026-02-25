@@ -16,7 +16,7 @@
 │  │ Hotkeys  │  │  Audio   │  │   Transcriber    │  │
 │  │ Manager  │  │ Capture  │  │   (abstract)     │  │
 │  │          │  │          │  │                   │  │
-│  │ pynput   │  │sounddevice│ │ ┌──────┐┌──────┐ │  │
+│  │ pynput + │  │sounddevice│ │ ┌──────┐┌──────┐ │  │
 │  └────┬─────┘  └────┬─────┘ │ │ MLX  ││OpenAI│ │  │
 │       │              │       │ │Whisper││ API  │ │  │
 │       │              │       │ └──────┘└──────┘ │  │
@@ -112,17 +112,20 @@ Remote transcription via OpenAI's Whisper API.
 
 Manages global keyboard shortcuts for push-to-talk and hands-free modes.
 
+Uses pynput for regular keys and a Quartz CGEvent tap for the `fn` (globe) key,
+which pynput cannot detect on macOS. Requires Input Monitoring permission.
+
 ```python
 class HotkeyManager:
-    def register_push_to_talk(self, key: str, on_press: Callable, on_release: Callable)
-    def register_hands_free_toggle(self, keys: tuple[str], on_toggle: Callable)
+    def __init__(self, push_to_talk_key="fn", hands_free_keys=["fn", "space"], ...)
     def start() -> None
     def stop() -> None
+    def update_keys(push_to_talk_key=None, hands_free_keys=None) -> None
 ```
 
 **Modes:**
-- **Push-to-talk:** Hold key → record → release → transcribe → inject text
-- **Hands-free:** Press combo → start recording → press combo again → stop → transcribe → inject text
+- **Push-to-talk:** Hold `fn` → record → release → transcribe → inject text
+- **Hands-free:** Press `fn+Space` → start recording → press again → stop → transcribe → inject text
 
 ### 7. `text_input.py` — Text Injection
 
