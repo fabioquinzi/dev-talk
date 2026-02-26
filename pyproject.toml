@@ -39,6 +39,9 @@ dev-talk = "dev_talk.__main__:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+dev_talk = ["resources/*.png", "resources/*.icns"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
