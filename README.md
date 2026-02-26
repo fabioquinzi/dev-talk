@@ -12,10 +12,11 @@ A menubar application that captures your voice and transcribes it into text in a
 - **Full recording mode** — Record everything, then transcribe at once (more accurate)
 - **Local-first** — Runs entirely on your Mac using MLX Whisper, no cloud needed
 - **OpenAI API fallback** — Optional cloud transcription via OpenAI Whisper API
+- **Anti-hallucination** — 3-layer defense (energy gate + Silero VAD + tuned Whisper params) prevents phantom text on silence
 - **Any microphone** — Select from all connected input devices
 - **Any text field** — Injects text into whatever app is focused (via Cmd+V or keyboard simulation)
 - **Recording indicator** — Floating pill overlay shows when you're recording
-- **Menubar app** — Lives in your menubar, out of the way
+- **Menubar app** — Waveform icon lives in your menubar, turns red while recording
 
 ## Requirements
 
@@ -75,7 +76,9 @@ Settings are stored in `~/.config/dev-talk/config.json`. Edit directly or use th
   "mic_device_id": null,
   "streaming_mode": true,
   "chunk_duration_s": 3.0,
-  "injection_method": "paste"
+  "injection_method": "paste",
+  "vad_enabled": true,
+  "energy_threshold_db": -40.0
 }
 ```
 
@@ -90,6 +93,8 @@ Settings are stored in `~/.config/dev-talk/config.json`. Edit directly or use th
 | `injection_method` | `"paste"`, `"type"` | Text injection method |
 | `push_to_talk_key` | Any key name | Hold-to-record key |
 | `hands_free_keys` | List of key names | Toggle-recording combo |
+| `vad_enabled` | `true`, `false` | Voice activity detection to prevent hallucinations |
+| `energy_threshold_db` | `-60.0` to `-20.0` | RMS energy gate threshold in dB |
 
 ### Using OpenAI API
 
@@ -135,11 +140,13 @@ src/dev_talk/
   app.py              — Menubar app (rumps) wiring everything together
   audio.py            — Microphone capture and device enumeration
   transcriber.py      — STT engine abstraction (protocol + coordinator)
+  vad.py              — Voice activity detection and energy gating
   config.py           — JSON settings persistence
   hotkeys.py          — Global keyboard shortcuts (NSEvent global monitors)
   diagnostics.py      — Permission checks and hardware tests
   text_input.py       — Text injection via CGEvent / clipboard
   overlay.py          — Floating recording indicator (PyObjC)
+  resources/          — Menubar waveform icons (idle/recording, 1x/2x)
   engines/
     local_mlx.py      — MLX Whisper local engine
     remote_openai.py  — OpenAI Whisper API engine
@@ -156,11 +163,12 @@ Single characters: `a`-`z`, `0`-`9`
 
 1. **Hotkey pressed** → Audio recording starts from selected microphone
 2. **Audio captured** → 16kHz mono float32 via PortAudio/sounddevice
-3. **Transcription** → Audio sent to MLX Whisper (local) or OpenAI API (remote)
+3. **Pre-filtering** → Energy gate (skip silence) → Silero VAD (skip non-speech noise)
+4. **Transcription** → Audio sent to MLX Whisper (local) or OpenAI API (remote)
    - Streaming mode: 3-second chunks transcribed incrementally
    - Full mode: entire recording transcribed at once
-4. **Text injection** → Transcribed text pasted into the focused text field via Cmd+V
-5. **Hotkey released** → Recording stops, overlay hides
+5. **Text injection** → Transcribed text pasted into the focused text field via Cmd+V
+6. **Hotkey released** → Recording stops, overlay hides
 
 ## Resource Usage (M4 MacBook)
 
