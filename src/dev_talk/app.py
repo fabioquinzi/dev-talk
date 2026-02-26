@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from pathlib import Path
 
 import numpy as np
 import rumps
+from PyObjCTools.AppHelper import callAfter
 
 from dev_talk import __version__
 from dev_talk.audio import AudioManager
@@ -24,26 +27,33 @@ from dev_talk.transcriber import Transcriber
 
 logger = logging.getLogger(__name__)
 
-# Menubar icons (using emoji as simple icons; can be replaced with actual icon files)
-ICON_IDLE = "🎙️"
-ICON_RECORDING = "🔴"
+# Menubar icons (waveform PNGs in resources/)
+_RESOURCES = Path(__file__).parent / "resources"
+ICON_IDLE = str(_RESOURCES / "waveform_idle.png")
+ICON_RECORDING = str(_RESOURCES / "waveform_recording.png")
 
 
 class DevTalkApp(rumps.App):
     """macOS menubar speech-to-text application."""
 
     def __init__(self) -> None:
-        super().__init__(name="Dev Talk", title=ICON_IDLE, quit_button=None)
+        super().__init__(name="Dev Talk", icon=ICON_IDLE, template=True, quit_button=None)
 
         self._config = Config.load()
         self._audio = AudioManager(device_id=self._config.mic_device_id)
-        self._overlay = RecordingOverlay()
+        self._overlay = RecordingOverlay(on_stop=self._on_stop_button)
         self._hands_free_active = False
         self._recording_thread: threading.Thread | None = None
+        self._level_monitor_active = False
 
         # Set up transcription engine
         self._engine = self._create_engine()
-        self._transcriber = Transcriber(engine=self._engine, language=self._config.language)
+        self._transcriber = Transcriber(
+            engine=self._engine,
+            language=self._config.language,
+            vad_enabled=self._config.vad_enabled,
+            energy_threshold_db=self._config.energy_threshold_db,
+        )
 
         # Set up hotkeys
         self._hotkeys = HotkeyManager(
@@ -170,19 +180,19 @@ class DevTalkApp(rumps.App):
 
     def _on_ptt_start(self) -> None:
         """Push-to-talk key pressed — start recording."""
+        if self._hands_free_active:
+            return  # Hands-free owns the recording
         if self._audio.is_recording:
             return
         self._start_recording()
 
     def _on_ptt_stop(self) -> None:
         """Push-to-talk key released — stop and transcribe."""
+        if self._hands_free_active:
+            return  # Hands-free owns the recording
         if not self._audio.is_recording:
             return
-        if self._config.streaming_mode:
-            # Streaming mode: stop recording (stream_chunks generator will exit)
-            self._stop_recording_and_transcribe()
-        else:
-            self._stop_recording_and_transcribe()
+        self._stop_recording_and_transcribe()
 
     def _on_hands_free_toggle(self) -> None:
         """Hands-free combo pressed — toggle recording."""
@@ -191,13 +201,22 @@ class DevTalkApp(rumps.App):
             self._stop_recording_and_transcribe()
         else:
             self._hands_free_active = True
-            self._start_recording()
+            if self._audio.is_recording:
+                # Already recording (from PTT) — switch overlay to hands-free mode
+                self._overlay.show_recording(hands_free=True)
+            else:
+                self._start_recording()
 
     def _start_recording(self) -> None:
         """Start audio capture and update UI."""
+        if self._audio.is_recording:
+            return
+
         self._audio.start_recording()
-        self.title = ICON_RECORDING
-        self._overlay.show_recording()
+        self.template = False
+        self.icon = ICON_RECORDING
+        self._overlay.show_recording(hands_free=self._hands_free_active)
+        self._start_level_monitor()
         logger.info("Recording started")
 
         if self._config.streaming_mode:
@@ -208,10 +227,12 @@ class DevTalkApp(rumps.App):
 
     def _stop_recording_and_transcribe(self) -> None:
         """Stop recording and transcribe the audio."""
+        self._stop_level_monitor()
         if self._config.streaming_mode:
             # Just stop recording — the streaming thread will handle the rest
             audio = self._audio.stop_recording()
-            self.title = ICON_IDLE
+            self.icon = ICON_IDLE
+            self.template = True
             self._overlay.hide()
             logger.info("Recording stopped (streaming mode)")
         else:
@@ -234,10 +255,23 @@ class DevTalkApp(rumps.App):
                 logger.info("Injected text: %s", text[:100])
         except Exception as e:
             logger.error("Transcription failed: %s", e)
-            rumps.notification("Dev Talk", "Transcription Error", str(e))
+            callAfter(lambda: rumps.notification("Dev Talk", "Transcription Error", str(e)))
         finally:
-            self.title = ICON_IDLE
-            self._overlay.hide()
+            callAfter(self._set_idle)
+
+    def _warmup_engine(self) -> None:
+        """Download and load the STT model at startup."""
+        if not hasattr(self._engine, "warmup"):
+            return
+        try:
+            callAfter(self._overlay.show_loading)
+            self._engine.warmup()
+            logger.info("Engine ready: %s", self._transcriber.engine_name)
+        except Exception as e:
+            logger.error("Engine warmup failed: %s", e)
+            callAfter(lambda: rumps.notification("Dev Talk", "Model Load Failed", str(e)))
+        finally:
+            callAfter(self._overlay.hide)
 
     def _stream_transcribe(self) -> None:
         """Transcribe audio chunks as they arrive (runs in background thread)."""
@@ -253,8 +287,35 @@ class DevTalkApp(rumps.App):
         except Exception as e:
             logger.error("Streaming transcription failed: %s", e)
         finally:
-            self.title = ICON_IDLE
-            self._overlay.hide()
+            callAfter(self._set_idle)
+
+    def _set_idle(self) -> None:
+        """Reset UI to idle state (must be called on the main thread)."""
+        self.icon = ICON_IDLE
+        self.template = True
+        self._overlay.hide()
+
+    def _on_stop_button(self) -> None:
+        """Handle the overlay stop button click (hands-free mode)."""
+        if self._hands_free_active:
+            self._hands_free_active = False
+            self._stop_recording_and_transcribe()
+
+    def _start_level_monitor(self) -> None:
+        """Start polling audio level for the overlay bars."""
+        self._level_monitor_active = True
+        threading.Thread(target=self._level_monitor_loop, daemon=True).start()
+
+    def _stop_level_monitor(self) -> None:
+        """Stop the audio level polling thread."""
+        self._level_monitor_active = False
+
+    def _level_monitor_loop(self) -> None:
+        """Poll audio peak level and update overlay bars (runs in background thread)."""
+        while self._level_monitor_active and self._audio.is_recording:
+            peak = self._audio.get_peak_level()
+            callAfter(lambda p=peak: self._overlay.update_level(p))
+            time.sleep(0.05)  # ~20fps
 
     def _check_permissions(self, sender: rumps.MenuItem) -> None:
         """Run all permission checks and show results."""
@@ -346,4 +407,8 @@ class DevTalkApp(rumps.App):
         )
         logger.info("Starting Dev Talk v%s", __version__)
         self._hotkeys.start()
+
+        # Preload the STT model in the background so first transcription is instant
+        threading.Thread(target=self._warmup_engine, daemon=True).start()
+
         super().run(**kwargs)

@@ -8,9 +8,25 @@ from unittest.mock import MagicMock, patch
 from types import MethodType
 
 import numpy as np
+
+from dev_talk.app import ICON_IDLE, ICON_RECORDING
 import pytest
 
 from dev_talk.config import Config
+
+# Patch callAfter to run synchronously in tests (no main thread run loop)
+_original_call_after = None
+
+
+def _sync_call_after(func):
+    """In tests, just call the function immediately."""
+    func()
+
+
+@pytest.fixture(autouse=True)
+def _patch_call_after():
+    with patch("dev_talk.app.callAfter", side_effect=_sync_call_after):
+        yield
 
 
 def _make_app():
@@ -24,10 +40,12 @@ def _make_app():
     app._overlay = MagicMock()
     app._hands_free_active = False
     app._recording_thread = None
+    app._level_monitor_active = False
     app._engine = MagicMock()
     app._transcriber = MagicMock()
     app._hotkeys = MagicMock()
-    app.title = "🎙️"
+    app.icon = ICON_IDLE
+    app.template = True
     app.menu = MagicMock()
 
     # Bind all DevTalkApp methods to our fake app
@@ -49,11 +67,22 @@ class TestStartRecording:
         app = _make_app()
         app._config.streaming_mode = False
 
-        app._start_recording()
+        with patch("dev_talk.app.threading.Thread"):
+            app._start_recording()
 
         app._audio.start_recording.assert_called_once()
-        assert app.title == "🔴"
-        app._overlay.show_recording.assert_called_once()
+        assert app.icon == ICON_RECORDING
+        app._overlay.show_recording.assert_called_once_with(hands_free=False)
+
+    def test_start_recording_hands_free_flag(self):
+        app = _make_app()
+        app._config.streaming_mode = False
+        app._hands_free_active = True
+
+        with patch("dev_talk.app.threading.Thread"):
+            app._start_recording()
+
+        app._overlay.show_recording.assert_called_once_with(hands_free=True)
 
     def test_start_recording_streaming_starts_thread(self):
         app = _make_app()
@@ -65,8 +94,8 @@ class TestStartRecording:
             app._start_recording()
 
         app._audio.start_recording.assert_called_once()
-        MockThread.assert_called_once()
-        mock_thread.start.assert_called_once()
+        # Two threads: level monitor + streaming transcribe
+        assert MockThread.call_count == 2
 
 
 class TestStopRecording:
@@ -91,7 +120,7 @@ class TestStopRecording:
         app._stop_recording_and_transcribe()
 
         app._audio.stop_recording.assert_called_once()
-        assert app.title == "🎙️"
+        assert app.icon == ICON_IDLE
         app._overlay.hide.assert_called_once()
 
 
@@ -101,12 +130,21 @@ class TestPushToTalk:
         app._audio.is_recording = False
         app._config.streaming_mode = False
 
-        app._on_ptt_start()
+        with patch("dev_talk.app.threading.Thread"):
+            app._on_ptt_start()
         app._audio.start_recording.assert_called_once()
 
     def test_ptt_start_skipped_when_recording(self):
         app = _make_app()
         app._audio.is_recording = True
+
+        app._on_ptt_start()
+        app._audio.start_recording.assert_not_called()
+
+    def test_ptt_start_skipped_when_hands_free_active(self):
+        app = _make_app()
+        app._audio.is_recording = False
+        app._hands_free_active = True
 
         app._on_ptt_start()
         app._audio.start_recording.assert_not_called()
@@ -127,6 +165,14 @@ class TestPushToTalk:
         app._on_ptt_stop()
         app._audio.stop_recording.assert_not_called()
 
+    def test_ptt_stop_skipped_when_hands_free_active(self):
+        app = _make_app()
+        app._audio.is_recording = True
+        app._hands_free_active = True
+
+        app._on_ptt_stop()
+        app._audio.stop_recording.assert_not_called()
+
 
 class TestHandsFree:
     def test_toggle_on_starts_recording(self):
@@ -134,10 +180,24 @@ class TestHandsFree:
         app._hands_free_active = False
         app._config.streaming_mode = False
 
-        app._on_hands_free_toggle()
+        with patch("dev_talk.app.threading.Thread"):
+            app._on_hands_free_toggle()
 
         assert app._hands_free_active is True
         app._audio.start_recording.assert_called_once()
+        app._overlay.show_recording.assert_called_once_with(hands_free=True)
+
+    def test_toggle_on_takes_over_existing_recording(self):
+        app = _make_app()
+        app._hands_free_active = False
+        app._audio.is_recording = True
+
+        app._on_hands_free_toggle()
+
+        assert app._hands_free_active is True
+        # Should NOT call start_recording again — just switch overlay mode
+        app._audio.start_recording.assert_not_called()
+        app._overlay.show_recording.assert_called_once_with(hands_free=True)
 
     def test_toggle_off_stops_recording(self):
         app = _make_app()
@@ -149,6 +209,27 @@ class TestHandsFree:
 
         assert app._hands_free_active is False
         app._audio.stop_recording.assert_called_once()
+
+
+class TestStopButton:
+    def test_stop_button_stops_hands_free(self):
+        app = _make_app()
+        app._hands_free_active = True
+        app._config.streaming_mode = True
+        app._audio.stop_recording.return_value = np.array([], dtype=np.float32)
+
+        app._on_stop_button()
+
+        assert app._hands_free_active is False
+        app._audio.stop_recording.assert_called_once()
+
+    def test_stop_button_ignored_when_not_hands_free(self):
+        app = _make_app()
+        app._hands_free_active = False
+
+        app._on_stop_button()
+
+        app._audio.stop_recording.assert_not_called()
 
 
 class TestTranscription:
@@ -213,6 +294,37 @@ class TestStreamingToggle:
         app._toggle_streaming_mode(MagicMock())
 
         assert app._config.streaming_mode is False
+
+
+class TestWarmupEngine:
+    def test_warmup_calls_engine(self):
+        app = _make_app()
+        app._engine.warmup = MagicMock()
+
+        app._warmup_engine()
+
+        app._engine.warmup.assert_called_once()
+        app._overlay.show_loading.assert_called_once()
+        app._overlay.hide.assert_called_once()
+
+    def test_warmup_skipped_without_method(self):
+        app = _make_app()
+        # Default MagicMock engine has no real warmup — remove it
+        del app._engine.warmup
+
+        app._warmup_engine()
+
+        app._overlay.show_loading.assert_not_called()
+
+    @patch("dev_talk.app.rumps.notification")
+    def test_warmup_handles_error(self, mock_notif):
+        app = _make_app()
+        app._engine.warmup = MagicMock(side_effect=RuntimeError("download failed"))
+
+        app._warmup_engine()
+
+        mock_notif.assert_called_once()
+        app._overlay.hide.assert_called_once()
 
 
 class TestQuit:
