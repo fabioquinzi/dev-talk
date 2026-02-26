@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# py2app
+dist/
+build/
+
+# Config (user-specific)
+# Note: default config is in repo, user overrides are in ~/.config/dev-talk/
+
+# Model cache (downloaded at runtime)
+models/
+
+# Audio test files
+*.wav
+*.flac
+*.mp3
+
+# Environment variables
+.env
+.env.local
