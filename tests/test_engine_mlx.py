@@ -62,6 +62,11 @@ class TestMLXWhisperEngine:
         assert call_kwargs.kwargs["path_or_hf_repo"] == DEFAULT_MODEL
         assert call_kwargs.kwargs["language"] == "en"
         assert call_kwargs.kwargs["verbose"] is False
+        assert call_kwargs.kwargs["condition_on_previous_text"] is False
+        assert call_kwargs.kwargs["word_timestamps"] is True
+        assert call_kwargs.kwargs["hallucination_silence_threshold"] == 1.0
+        assert call_kwargs.kwargs["no_speech_threshold"] == 0.3
+        assert call_kwargs.kwargs["temperature"] == (0.0,)
 
     def test_transcribe_with_language(self):
         engine = MLXWhisperEngine()
@@ -95,3 +100,37 @@ class TestMLXWhisperEngine:
             first_ref = engine._mlx_whisper
             engine._ensure_loaded()  # Should not re-import
             assert engine._mlx_whisper is first_ref
+
+    def test_warmup_loads_and_transcribes(self):
+        engine = MLXWhisperEngine()
+        mock_mlx = MagicMock()
+        mock_mlx.transcribe.return_value = {"text": ""}
+        engine._mlx_whisper = mock_mlx
+
+        engine.warmup()
+
+        assert engine._warmed_up is True
+        mock_mlx.transcribe.assert_called_once()
+        # Verify it used a 1-second silent array
+        call_args = mock_mlx.transcribe.call_args
+        audio_arg = call_args.args[0]
+        assert audio_arg.shape == (16000,)
+        assert float(audio_arg.max()) == 0.0
+
+    def test_warmup_sets_flag(self):
+        engine = MLXWhisperEngine()
+        assert engine._warmed_up is False
+        mock_mlx = MagicMock()
+        mock_mlx.transcribe.return_value = {"text": ""}
+        engine._mlx_whisper = mock_mlx
+
+        engine.warmup()
+        assert engine._warmed_up is True
+
+    def test_model_setter_resets_warmup(self):
+        engine = MLXWhisperEngine()
+        engine._warmed_up = True
+        engine._mlx_whisper = MagicMock()
+
+        engine.model = "mlx-community/whisper-tiny"
+        assert engine._warmed_up is False

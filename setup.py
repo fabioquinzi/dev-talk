@@ -34,6 +34,7 @@ OPTIONS = {
 
         "numpy",
         "openai",
+        "silero_vad_lite",
     ],
 }
 

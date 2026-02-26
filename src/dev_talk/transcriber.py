@@ -2,6 +2,10 @@
 
 Defines the TranscriberEngine protocol and Transcriber coordinator
 that supports both full-recording and chunked-streaming transcription.
+
+Audio is filtered before reaching the engine:
+1. Energy gate — skip audio below an RMS dB threshold
+2. Silero VAD — skip audio with no detected speech
 """
 
 from __future__ import annotations
@@ -10,6 +14,8 @@ import logging
 from typing import Generator, Protocol, runtime_checkable
 
 import numpy as np
+
+from dev_talk.vad import VoiceActivityDetector, is_silent
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +43,23 @@ class Transcriber:
     Supports two modes:
     - transcribe_full: transcribe an entire audio buffer at once
     - transcribe_streaming: transcribe an iterator of audio chunks, yielding text incrementally
+
+    Both modes apply energy gating and VAD before sending audio to the engine.
     """
 
-    def __init__(self, engine: TranscriberEngine, language: str = "en") -> None:
+    def __init__(
+        self,
+        engine: TranscriberEngine,
+        language: str = "en",
+        vad_enabled: bool = True,
+        energy_threshold_db: float = -40.0,
+    ) -> None:
         self._engine = engine
         self._language = language
+        self._energy_threshold_db = energy_threshold_db
+        self._vad: VoiceActivityDetector | None = None
+        if vad_enabled:
+            self._vad = VoiceActivityDetector()
 
     @property
     def engine(self) -> TranscriberEngine:
@@ -58,6 +76,16 @@ class Transcriber:
     def is_available(self) -> bool:
         return self._engine.is_available()
 
+    def _should_skip(self, audio: np.ndarray) -> bool:
+        """Return True if audio should be skipped (silence or no speech)."""
+        if is_silent(audio, self._energy_threshold_db):
+            logger.debug("Skipping silent audio (energy gate)")
+            return True
+        if self._vad is not None and not self._vad.contains_speech(audio):
+            logger.debug("Skipping audio with no detected speech (VAD)")
+            return True
+        return False
+
     def transcribe_full(self, audio: np.ndarray) -> str:
         """Transcribe a complete audio buffer.
 
@@ -68,6 +96,9 @@ class Transcriber:
             Transcribed text string.
         """
         if audio.size == 0:
+            return ""
+
+        if self._should_skip(audio):
             return ""
 
         logger.debug(
@@ -91,6 +122,9 @@ class Transcriber:
         """
         for chunk in audio_chunks:
             if chunk.size == 0:
+                continue
+
+            if self._should_skip(chunk):
                 continue
 
             logger.debug(

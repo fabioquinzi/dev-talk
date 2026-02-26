@@ -16,6 +16,8 @@ def test_default_config():
     assert cfg.hands_free_keys == ["fn", "space"]
     assert cfg.mic_device_id is None
     assert cfg.injection_method == "paste"
+    assert cfg.vad_enabled is True
+    assert cfg.energy_threshold_db == -40.0
 
 
 def test_save_and_load(tmp_config_dir):
@@ -94,6 +96,8 @@ def test_roundtrip_all_fields(tmp_config_dir):
         streaming_mode=False,
         chunk_duration_s=5.0,
         injection_method="type",
+        vad_enabled=False,
+        energy_threshold_db=-30.0,
     )
     cfg.save(path)
 
@@ -109,3 +113,5 @@ def test_roundtrip_all_fields(tmp_config_dir):
     assert loaded.streaming_mode is False
     assert loaded.chunk_duration_s == 5.0
     assert loaded.injection_method == "type"
+    assert loaded.vad_enabled is False
+    assert loaded.energy_threshold_db == -30.0

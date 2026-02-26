@@ -42,6 +42,10 @@ class Config:
     # Text injection method: "paste" or "type"
     injection_method: str = "paste"
 
+    # Voice activity detection (skip silence before sending to engine)
+    vad_enabled: bool = True
+    energy_threshold_db: float = -40.0
+
     def save(self, path: Path | None = None) -> None:
         """Persist config to disk."""
         target = path or CONFIG_FILE
