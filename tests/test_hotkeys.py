@@ -297,6 +297,35 @@ class TestFnHandsFreeCombo:
         hm._on_key_down(SPACE_CODE, " ")
         toggle_cb.assert_called_once()
 
+    def test_ptt_cancelled_silently_when_hf_triggers(self):
+        """PTT should be cancelled without firing stop when HF combo activates."""
+        start_cb = MagicMock()
+        stop_cb = MagicMock()
+        toggle_cb = MagicMock()
+        hm = HotkeyManager(
+            push_to_talk_key="fn",
+            hands_free_keys=["fn", "space"],
+            on_push_to_talk_start=start_cb,
+            on_push_to_talk_stop=stop_cb,
+            on_hands_free_toggle=toggle_cb,
+        )
+
+        # fn pressed — triggers PTT start
+        hm._on_flags_changed(FN_FLAG)
+        assert hm._ptt_active is True
+        start_cb.assert_called_once()
+
+        # space pressed while fn held — triggers hands-free
+        hm._on_key_down(SPACE_CODE, " ")
+        toggle_cb.assert_called_once()
+        # PTT should be silently cancelled (no stop callback)
+        assert hm._ptt_active is False
+        stop_cb.assert_not_called()
+
+        # fn released — should NOT fire PTT stop (already cancelled)
+        hm._on_flags_changed(0)
+        stop_cb.assert_not_called()
+
 
 class TestUpdateKeysWithModifiers:
     def test_update_to_fn_key(self):

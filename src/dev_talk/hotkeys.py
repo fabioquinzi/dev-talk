@@ -284,6 +284,11 @@ class HotkeyManager:
         """Check if any hotkey combo is satisfied after a key press."""
         # Hands-free combo takes priority (all keys must be pressed)
         if self._hf_keys and self._is_combo_active(self._hf_keys):
+            # If PTT was active, cancel it silently — don't fire ptt_stop,
+            # the recording will continue under hands-free control.
+            if self._ptt_active:
+                self._ptt_active = False
+                logger.debug("PTT cancelled — switching to hands-free")
             logger.debug("Hands-free toggle triggered")
             self._on_hf_toggle()
             return
