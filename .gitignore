@@ -27,9 +27,10 @@ env/
 .LSOverride
 Icon?
 
-# py2app
+# Build artifacts
 dist/
 build/
+.eggs/
 
 # Config (user-specific)
 # Note: default config is in repo, user overrides are in ~/.config/dev-talk/

@@ -7,13 +7,17 @@ Development mode (alias):
     python setup.py py2app -A
 """
 
+from pathlib import Path
+
 from setuptools import setup
 
 APP = ["src/dev_talk/__main__.py"]
+RESOURCES_DIR = Path("src/dev_talk/resources")
 DATA_FILES = []
+RESOURCE_FILES = [str(p) for p in RESOURCES_DIR.glob("*.png")]
 OPTIONS = {
     "argv_emulation": False,
-    "iconfile": None,  # TODO: Add app icon
+    "iconfile": str(RESOURCES_DIR / "DevTalk.icns"),
     "plist": {
         "LSUIElement": True,  # Hide from Dock (menubar-only app)
         "CFBundleName": "Dev Talk",
@@ -24,6 +28,7 @@ OPTIONS = {
         "NSMicrophoneUsageDescription": "Dev Talk needs microphone access for speech-to-text.",
         "NSAccessibilityUsageDescription": "Dev Talk needs accessibility access to inject text and capture global hotkeys.",
     },
+    "resources": RESOURCE_FILES,
     "packages": [
         "dev_talk",
         "dev_talk.engines",
@@ -31,7 +36,6 @@ OPTIONS = {
         "mlx",
         "mlx_whisper",
         "sounddevice",
-
         "numpy",
         "openai",
         "silero_vad_lite",
