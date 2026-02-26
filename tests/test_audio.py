@@ -120,6 +120,30 @@ class TestAudioManager:
 
         assert mock_stream_cls.call_count == 1
 
+    def test_get_peak_level_empty(self):
+        am = AudioManager()
+        assert am.get_peak_level() == 0.0
+
+    def test_get_peak_level_with_data(self):
+        am = AudioManager()
+        # Simulate frames with known peak
+        am._frames = [np.array([[0.5], [-0.7], [0.3]], dtype=np.float32)]
+        assert am.get_peak_level() == pytest.approx(0.7)
+
+    def test_get_peak_level_clamped_to_one(self):
+        am = AudioManager()
+        am._frames = [np.array([[1.5]], dtype=np.float32)]
+        assert am.get_peak_level() == 1.0
+
+    def test_get_peak_level_uses_recent_frames(self):
+        am = AudioManager()
+        # Fill with 10 quiet frames and 1 loud recent frame
+        quiet = np.zeros((1024, 1), dtype=np.float32)
+        loud = np.ones((1024, 1), dtype=np.float32) * 0.9
+        am._frames = [quiet] * 10 + [loud]
+        # get_peak_level only looks at last 5 frames, so the loud one is included
+        assert am.get_peak_level() == pytest.approx(0.9)
+
     def test_stream_chunks_yields_correct_sizes(self):
         am = AudioManager()
         am._recording = True

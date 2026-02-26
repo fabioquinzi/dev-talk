@@ -116,6 +116,19 @@ class AudioManager:
             self._frames = []
             return audio
 
+    def get_peak_level(self) -> float:
+        """Return the current peak audio level (0.0 to 1.0).
+
+        Uses only the most recent frames for responsiveness.
+        """
+        with self._lock:
+            if not self._frames:
+                return 0.0
+            # Check only the last few blocks for snappy response
+            recent = self._frames[-5:] if len(self._frames) > 5 else self._frames
+            audio = np.concatenate(recent, axis=0).flatten()
+            return min(float(np.max(np.abs(audio))), 1.0)
+
     def get_chunk(self, clear: bool = True) -> np.ndarray:
         """Return currently buffered audio and optionally clear the buffer.
 
