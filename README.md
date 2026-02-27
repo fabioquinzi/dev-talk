@@ -18,16 +18,24 @@ A menubar application that captures your voice and transcribes it into text in a
 - **Recording indicator** — Floating pill overlay shows when you're recording
 - **Menubar app** — Waveform icon lives in your menubar, turns red while recording
 
-## Requirements
+## Install
 
-- macOS on Apple Silicon (M1/M2/M3/M4)
-- Python 3.12+
-- ~1.6 GB disk space for the Whisper model (auto-downloaded on first run)
-- ~2-4 GB RAM while running
+### Option A: Download the app (recommended)
 
-## Quick Start
+1. Download the latest `.zip` from [Releases](https://github.com/fabioquinzi/dev-talk/releases)
+2. Unzip it
+3. Drag **Dev Talk.app** into your `/Applications` folder
+4. Launch Dev Talk from Applications (or Spotlight)
 
-### 1. Clone and install
+On first launch, macOS will prompt you to grant:
+- **Microphone access** — for recording
+- **Accessibility** — for global hotkeys and text injection (System Settings → Privacy & Security → Accessibility)
+
+The Whisper model (~1.6 GB) will be downloaded automatically on first run.
+
+### Option B: Run from source
+
+Requires macOS on Apple Silicon (M1/M2/M3/M4) and Python 3.12+.
 
 ```bash
 git clone https://github.com/fabioquinzi/dev-talk.git
@@ -35,27 +43,12 @@ cd dev-talk
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-```
-
-### 2. Run the app
-
-```bash
 python -m dev_talk
 ```
 
-The app will appear in your menubar. On first run, the Whisper model (~1.6 GB) will be downloaded automatically.
+> **Note:** When running from a terminal, permissions are attributed to the terminal app, not Dev Talk. Use **Setup & Diagnostics** in the menubar dropdown to check which app needs the permissions.
 
-### 3. Grant permissions
-
-macOS will prompt you to grant:
-- **Microphone access** — for recording
-- **Accessibility** — for global hotkeys and text injection (System Settings → Privacy & Security → Accessibility)
-
-Use **Setup & Diagnostics** in the menubar dropdown to verify permissions and test hotkey detection.
-
-> **Note:** When running from a terminal (VS Code, Terminal.app, iTerm), permissions are attributed to the terminal app, not Dev Talk. The diagnostics menu will tell you which app needs the permissions.
-
-### 4. Start talking
+## Usage
 
 - **Push-to-talk:** Hold `fn`, speak, release → text appears in your focused app
 - **Hands-free:** Press `fn+Space` to start, speak freely, press again to stop
